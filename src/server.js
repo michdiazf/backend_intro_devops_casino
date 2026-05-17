@@ -26,7 +26,7 @@ app.use(express.json({ limit: '1mb' }));
 app.get('/health', async (req, res) => {
   try {
     await pool.query('SELECT 1');
-    res.json({ status: 'ok', db: 'up', uptime: process.uptime() });
+    res.json({ status: 'ok', db: 'up', uptime: process.uptime(), message: "deploy funcionando :)" });
   } catch (err) {
     res.status(503).json({ status: 'degraded', db: 'down', error: err.message });
   }
