@@ -54,7 +54,7 @@ jobs:
       - name: Deploy to EC2 backend 
         uses: appleboy/ssh-action@v1.0.3 
         with:
-          host: ${{ secrets.BACKTEND_HOST }}
+          host: ${{ secrets.BACKEND_HOST }}
           username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
           script: |
