@@ -1,0 +1,88 @@
+name: Deploy Backend to AWS
+
+on:
+  push:
+    branches: [deploy]
+
+env:
+  AWS_REGION: ${{ secrets.AWS_REGION }}
+  ECR_REPOSITORY: casino-backend 
+  IMAGE_TAG_VERSION: v1.0.0
+
+jobs:
+  build-push-deploy:
+    runs-on: ubuntu-latest 
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+    
+    #Configrar credenciales AWS
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-session-token: ${{ secrets.AWS_SESSION_TOKEN }}
+          aws-region: ${{ secrets.AWS_REGION }}
+    
+    #Login a Amazon ECR
+      - name: Login to Amazon ECR
+        id: login-ecr 
+        uses: aws-actions/amazon-ecr-login@v2
+
+    #Build de imagen Docker
+      - name: Build Docker image 
+        env: 
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker build \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_VERSION \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:latest \
+            -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} .
+
+    #Push a ECR
+      - name: Push a ECR 
+        env: 
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        run: |
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_VERSION 
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest 
+          docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+    
+    #Deploy a EC2
+      - name: Deploy to EC2 backend 
+        uses: appleboy/ssh-action@v1.0.3 
+        env: 
+          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+        with:
+          host: ${{ secrets.EC2_BACKEND_HOST }}
+          username: ${{ secrets.EC2_USER }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          envs: ECR_REGISTRY,ECR_REPOSITORY 
+          script: |
+            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY 
+
+            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+
+            docker stop casino-backend || true
+            docker rm casino-backend || true 
+            
+            docker network create casino-net || true 
+
+            docker run -d \
+              --name casino-backend \
+              --restart unless-stopped \
+              --network casino-net \
+              -p 3000:3000 \
+              -e PORT=3000 \
+              -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
+              -e JWT_EXPIRES_IN=8h \
+              -e DB_HOST=casino-db \
+              -e DB_PORT=5432 \
+              -e DB_USER="${{ secrets.DB_USER }}" \
+              -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+              -e DB_NAME="${{ secrets.DB_NAME }}" \
+              -e CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}" \
+              $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
