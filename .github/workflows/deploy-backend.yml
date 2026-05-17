@@ -53,36 +53,39 @@ jobs:
     #Deploy a EC2
       - name: Deploy to EC2 backend 
         uses: appleboy/ssh-action@v1.0.3 
-        env: 
-          ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
-          ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
         with:
-          host: ${{ secrets.EC2_BACKEND_HOST }}
-          username: ${{ secrets.EC2_USER }}
+          host: ${{ secrets.FRONTEND_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: ECR_REGISTRY,ECR_REPOSITORY 
           script: |
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY 
+            cat > /tmp/casino-key.pem << 'EOF'
+            ${{ secrets.EC2_SSH_KEY }}
+            EOF
 
-            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+            chmod 600 /tmp/casino-key.pem
 
-            docker stop casino-backend || true
-            docker rm casino-backend || true 
-            
-            docker network create casino-net || true 
+            ssh -o StrictHostKeyChecking=no -i /tmp/casino-key.pem ${{ secrets.EC2_USERNAME }}@${{ secrets.BACKEND_HOST }} << 'ENDSSH'
+              aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            docker run -d \
-              --name casino-backend \
-              --restart unless-stopped \
-              --network casino-net \
-              -p 3000:3000 \
-              -e PORT=3000 \
-              -e JWT_SECRET="${{ secrets.JWT_SECRET }}" \
-              -e JWT_EXPIRES_IN=8h \
-              -e DB_HOST=casino-db \
-              -e DB_PORT=5432 \
-              -e DB_USER="${{ secrets.DB_USER }}" \
-              -e DB_PASSWORD="${{ secrets.DB_PASSWORD }}" \
-              -e DB_NAME="${{ secrets.DB_NAME }}" \
-              -e CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}" \
-              $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+              docker pull $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_VERSION
+
+              docker stop casino-backend || true
+              docker rm casino-backend || true
+
+              docker network create casino-net || true
+
+              docker run -d \
+                --name casino-backend \
+                --restart unless-stopped \
+                --network casino-net \
+                -p 3000:3000 \
+                -e PORT=3000 \
+                -e JWT_SECRET="${JWT_SECRET}" \
+                -e JWT_EXPIRES_IN=8h \
+                -e DB_HOST=casino-db \
+                -e DB_PORT=5432 \
+                -e DB_USER="${DB_USER}" \
+                -e DB_PASSWORD="${DB_PASSWORD}" \
+                -e DB_NAME="${DB_NAME}" \
+                $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG_VERSION
+            ENDSSH
