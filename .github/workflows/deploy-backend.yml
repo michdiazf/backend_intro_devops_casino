@@ -51,25 +51,49 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
     
     #Deploy a EC2
-      - name: Deploy to EC2 backend 
-        uses: appleboy/ssh-action@v1.0.3 
-        env: 
+          # Deploy a EC2 backend privada usando la EC2 frontend como bastion
+      - name: Deploy to EC2 backend
+        uses: appleboy/ssh-action@v1.0.3
+        env:
           ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ env.ECR_REPOSITORY }}
+          AWS_REGION: ${{ secrets.AWS_REGION }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         with:
           host: ${{ secrets.EC2_BACKEND_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_SSH_KEY }}
-          envs: ECR_REGISTRY,ECR_REPOSITORY 
+
+          proxy_host: ${{ secrets.EC2_FRONTEND_HOST }}
+          proxy_username: ${{ secrets.EC2_USER }}
+          proxy_key: ${{ secrets.EC2_SSH_KEY }}
+
+          envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN
           script: |
-            aws ecr get-login-password --region ${{ secrets.AWS_REGION }} | docker login --username AWS --password-stdin $ECR_REGISTRY 
+            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
 
             docker pull $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
+            docker network create casino-net || true
+            docker volume create casino_pg_data || true
+
+            docker stop casino-db || true
+            docker rm casino-db || true
+
+            docker run -d \
+              --name casino-db \
+              --restart unless-stopped \
+              --network casino-net \
+              -e POSTGRES_DB="${{ secrets.DB_NAME }}" \
+              -e POSTGRES_USER="${{ secrets.DB_USER }}" \
+              -e POSTGRES_PASSWORD="${{ secrets.DB_PASSWORD }}" \
+              -v casino_pg_data:/var/lib/postgresql/data \
+              postgres:16-alpine
+
             docker stop casino-backend || true
-            docker rm casino-backend || true 
-            
-            docker network create casino-net || true 
+            docker rm casino-backend || true
 
             docker run -d \
               --name casino-backend \
@@ -86,3 +110,5 @@ jobs:
               -e DB_NAME="${{ secrets.DB_NAME }}" \
               -e CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}" \
               $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+
+            docker ps
