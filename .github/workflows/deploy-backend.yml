@@ -51,7 +51,6 @@ jobs:
           docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
     
     #Deploy a EC2
-          # Deploy a EC2 backend privada usando la EC2 frontend como bastion
       - name: Deploy to EC2 backend
         uses: appleboy/ssh-action@v1.0.3
         env:
@@ -62,27 +61,35 @@ jobs:
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
           AWS_SESSION_TOKEN: ${{ secrets.AWS_SESSION_TOKEN }}
         with:
-          host: ${{ secrets.EC2_BACKEND_HOST }}
-          username: ${{ secrets.EC2_USER }}
+          host: ${{ secrets.BACKEND_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
           key: ${{ secrets.EC2_SSH_KEY }}
 
-          proxy_host: ${{ secrets.EC2_FRONTEND_HOST }}
-          proxy_username: ${{ secrets.EC2_USER }}
+          proxy_host: ${{ secrets.FRONTEND_HOST }}
+          proxy_username: ${{ secrets.EC2_USERNAME }}
           proxy_key: ${{ secrets.EC2_SSH_KEY }}
 
           envs: ECR_REGISTRY,ECR_REPOSITORY,AWS_REGION,AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY,AWS_SESSION_TOKEN
           script: |
-            aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+            if ! command -v docker >/dev/null 2>&1; then
+              sudo dnf update -y
+              sudo dnf install -y docker
+              sudo systemctl enable --now docker
+            fi
 
-            docker pull $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+            sudo systemctl start docker
 
-            docker network create casino-net || true
-            docker volume create casino_pg_data || true
+            aws ecr get-login-password --region $AWS_REGION | sudo docker login --username AWS --password-stdin $ECR_REGISTRY
 
-            docker stop casino-db || true
-            docker rm casino-db || true
+            sudo docker pull $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
-            docker run -d \
+            sudo docker network create casino-net || true
+            sudo docker volume create casino_pg_data || true
+
+            sudo docker stop casino-db || true
+            sudo docker rm casino-db || true
+
+            sudo docker run -d \
               --name casino-db \
               --restart unless-stopped \
               --network casino-net \
@@ -92,10 +99,27 @@ jobs:
               -v casino_pg_data:/var/lib/postgresql/data \
               postgres:16-alpine
 
-            docker stop casino-backend || true
-            docker rm casino-backend || true
+            echo "Esperando PostgreSQL..."
+            for i in {1..30}; do
+              if sudo docker exec casino-db pg_isready -U "${{ secrets.DB_USER }}" -d "${{ secrets.DB_NAME }}"; then
+                break
+              fi
+              sleep 2
+            done
 
-            docker run -d \
+            echo "Inicializando esquema de base de datos..."
+            sudo docker run --rm \
+              --network casino-net \
+              $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+              sh -c 'cat /app/db/init.sql' \
+              | sudo docker exec -i casino-db psql \
+                  -U "${{ secrets.DB_USER }}" \
+                  -d "${{ secrets.DB_NAME }}"
+
+            sudo docker stop casino-backend || true
+            sudo docker rm casino-backend || true
+
+            sudo docker run -d \
               --name casino-backend \
               --restart unless-stopped \
               --network casino-net \
@@ -111,4 +135,4 @@ jobs:
               -e CORS_ORIGIN="${{ secrets.CORS_ORIGIN }}" \
               $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
 
-            docker ps
+            sudo docker ps
